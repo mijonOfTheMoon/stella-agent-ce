@@ -1,5 +1,6 @@
 from openai import AsyncAzureOpenAI, AzureOpenAI, AsyncOpenAI
 import openai
+import asyncio
 
 import tiktoken
 
@@ -484,13 +485,19 @@ class llmAgentWorker(object):
 
         elif platform == "aliyun":
             try:
-
-                responses = dashscope.Generation.call(
-                    model=self.engine_name,  # Generation.Models.qwen_turbo,
-                    messages=self.messages,
-                    result_format="message",
-                    stream=True,
-                    incremental_output=True,
+                # Bug fix 1: Generation.call() is synchronous — run in executor
+                # to avoid blocking the Sanic async event loop (same pattern as
+                # azure/openai which use 'await ... .create()')
+                loop = asyncio.get_event_loop()
+                responses = await loop.run_in_executor(
+                    None,
+                    lambda: dashscope.Generation.call(
+                        model=self.engine_name,  # Generation.Models.qwen_turbo,
+                        messages=self.messages,
+                        result_format="message",
+                        stream=True,
+                        incremental_output=True,
+                    ),
                 )
             except Exception as e:
                 raise BadRequestException("APP_ERROR", const.APP_ERROR, f"{e}")
@@ -501,38 +508,51 @@ class llmAgentWorker(object):
             output_all = []
 
             async def generate_data(output, output_all):
-                for response in responses:
-                    # 结束时间
-                    working_end_time = datetime.datetime.now()
+                # Bug fix 2: wrap iteration in try-except (the sync iterator
+                # may raise if 'responses' is not iterable, e.g. an error
+                # response object on international endpoint).
+                try:
+                    for response in responses:
+                        # 结束时间
+                        working_end_time = datetime.datetime.now()
 
-                    all_time = (
-                        working_end_time.timestamp() - working_start_time.timestamp()
-                    )
+                        all_time = (
+                            working_end_time.timestamp() - working_start_time.timestamp()
+                        )
 
-                    # msg = f"用户: {self.user_info.get('ID', 0)} 请求gpt开始时间: {working_start_time}, 结束时间: {working_end_time}, 共耗时: {all_time} 秒,返回信息: {response}"
-                    msg = {}
-                    msg["user_id"] = self.user_info.get("ID", 0)
-                    msg["start_time"] = f"{working_start_time}"
-                    msg["end_time"] = f"{working_end_time}"
-                    msg["all_time"] = all_time
-                    msg["return"] = response
+                        # msg = f"用户: {self.user_info.get('ID', 0)} 请求gpt开始时间: {working_start_time}, 结束时间: {working_end_time}, 共耗时: {all_time} 秒,返回信息: {response}"
+                        msg = {}
+                        msg["user_id"] = self.user_info.get("ID", 0)
+                        msg["start_time"] = f"{working_start_time}"
+                        msg["end_time"] = f"{working_end_time}"
+                        msg["all_time"] = all_time
+                        msg["return"] = response
 
-                    output_all.append(msg)
+                        output_all.append(msg)
 
-                    content = ""
-                    if response.status_code == HTTPStatus.OK:
-                        # print(response)
-                        item = response.output
-                        if item["choices"]:
-                            delta = item["choices"][0].get("message", {})
-                            if "content" in delta:
-                                content = delta.get("content", "")
-                    else:
-                        content = response.message
-                        # content = '流式返回错误: 请求id: %s, 状态码: %s, 错误码: %s, 错误信息: %s' % (response.request_id, response.status_code, response.code, response.message)
+                        content = ""
+                        if response.status_code == HTTPStatus.OK:
+                            # print(response)
+                            item = response.output
+                            if item["choices"]:
+                                delta = item["choices"][0].get("message", {})
+                                if "content" in delta:
+                                    content = delta.get("content", "")
+                        else:
+                            # Bug fix 2: response.message is empty on Aliyun
+                            # international endpoint — use fallback error message
+                            content = response.message or (
+                                'Stream error: request_id=%s, status_code=%s, code=%s'
+                                % (response.request_id, response.status_code, response.code)
+                            )
 
-                    output.append(f"{content}")
-                    yield content
+                        output.append(f"{content}")
+                        yield content
+                        # Yield control back to event loop between sync iterations
+                        await asyncio.sleep(0)
+                except Exception as e:
+                    log.error(f"Aliyun stream iteration error: {e}")
+                    yield f"Stream error: {e}"
 
                 # 写入
                 self.output = output

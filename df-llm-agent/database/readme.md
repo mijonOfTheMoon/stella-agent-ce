@@ -8,3 +8,4 @@
 db_version 初始版本为1.0.0.0，每次更新issu，都依次递增例如：1.0.0.1, 1.0.0.2
 
 每次新增x.x.x.x.sql时 都必须同时更新dockerfile里的db_version
+
