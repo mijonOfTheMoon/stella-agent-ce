@@ -22,7 +22,15 @@ ai:
             api_base: ""
             api_version: ""
             engine_name: 
-                - ""
+                    - ""
+        -
+            platform: "openai"
+            enable: False
+            model: "gpt"
+            api_key: ""
+            api_base: ""
+            engine_name: 
+                - "gpt-3.5-turbo"
         -
             platform: "aliyun"
             enable: False

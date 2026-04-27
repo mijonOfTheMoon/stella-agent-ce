@@ -1,4 +1,4 @@
-from openai import AsyncAzureOpenAI, AzureOpenAI
+from openai import AsyncAzureOpenAI, AzureOpenAI, AsyncOpenAI
 import openai
 
 import tiktoken
@@ -77,7 +77,7 @@ log = logger.getLogger(__name__)
 
 class llmAgentWorker(object):
 
-    def __init__(self, request=None, user_info='', user_question={}, system_content="", messages="", query="", res_chat_id=0, engine_name="", output=[], output_all=[], custom_llm={}, azure_client=None, langchain_azure_client=None):
+    def __init__(self, request=None, user_info='', user_question={}, system_content="", messages="", query="", res_chat_id=0, engine_name="", output=[], output_all=[], custom_llm={}, azure_client=None, langchain_azure_client=None, openai_client=None):
         self.request = request
 
         self.user_info = user_info
@@ -110,6 +110,9 @@ class llmAgentWorker(object):
 
         # Df组件
         self.langchain_azure_client = langchain_azure_client
+
+        # OpenAI client
+        self.openai_client = openai_client
 
     # openai token 计算
     async def num_tokens_from_messages(self, messages, model="gpt-3.5-turbo-0613"):
@@ -294,7 +297,11 @@ class llmAgentWorker(object):
                         f"{const.DATA_NOT_FOUND}: 请确认{key}已经正确配置",
                     )
 
-            openai.api_key = engine_config.get("api_key")
+            api_base = engine_config.get("api_base", None)
+            self.openai_client = AsyncOpenAI(
+                api_key=engine_config.get("api_key"),
+                base_url=api_base if api_base else None,
+            )
             self.engine_name = engine_config.get("engine_name")
 
         elif platform == "aliyun":
@@ -385,18 +392,19 @@ class llmAgentWorker(object):
                 )
 
         elif platform == "aliyun":
-
-            response_token = dashscope.Tokenization.call(
-                model=self.engine_name, messages=self.messages
-            )
-            if response_token.status_code != HTTPStatus.OK:
-                raise BadRequestException(
-                    "FAIL", f"{const.FAIL}: 计算token数量错误: {response_token.message}"
+            try:
+                response_token = dashscope.Tokenization.call(
+                    model=self.engine_name, messages=self.messages
                 )
-
-            usage = response_token.usage
-
-            conv_history_tokens = usage.get("input_tokens", 0)
+                if response_token.status_code != HTTPStatus.OK:
+                    log.warning(f"Tokenization failed: {response_token.message}, skipping token count")
+                    conv_history_tokens = 0
+                else:
+                    usage = response_token.usage
+                    conv_history_tokens = usage.get("input_tokens", 0)
+            except Exception as e:
+                log.warning(f"Tokenization call error: {e}, skipping token count")
+                conv_history_tokens = 0
 
         print(conv_history_tokens)
         # 记录会话
@@ -421,8 +429,8 @@ class llmAgentWorker(object):
                         model=self.engine_name, messages=self.messages, stream=True
                     )
                 else:
-                    response = await openai.ChatCompletion.acreate(
-                        engine=self.engine_name, messages=self.messages, stream=True
+                    response = await self.openai_client.chat.completions.create(
+                        model=self.engine_name, messages=self.messages, stream=True
                     )
 
             except Exception as e:
