@@ -55,6 +55,7 @@ log = logger.getLogger(__name__)
 # dashscope需要的配置文件
 # {
 #     "api_key": "api_key_xxx",
+#     "api_base": "https://dashscope-intl.aliyuncs.com/api/v1",  # 可选，留空则使用默认地址
 #     "engine_name": "qwen-turbo",
 #     "engine_name": "qwen-plus",
 # }
@@ -314,6 +315,9 @@ class llmAgentWorker(object):
                     )
 
             dashscope.api_key = engine_config.get("api_key")
+            api_base = engine_config.get("api_base", "")
+            if api_base:
+                dashscope.base_http_api_url = api_base
             self.engine_name = engine_config.get("engine_name")
 
         elif platform == "baidu":

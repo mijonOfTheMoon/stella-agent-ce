@@ -36,6 +36,7 @@ ai:
             enable: False
             model: "dashscope"
             api_key: ""
+            api_base: ""
             engine_name: 
                 - "qwen-turbo"
                 - "qwen-plus"
